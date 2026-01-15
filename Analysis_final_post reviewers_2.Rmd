@@ -1,0 +1,1686 @@
+---
+title: "Analysis_Final"
+output: html_document
+date: "2025-02-10"
+---
+
+```{r}
+library(tidyr)
+library(dplyr)
+library(tableone)
+library(ggplot2)
+library(corrplot)
+library(ggpubr)
+library(psych)
+library(reshape2)
+library(Hmisc)
+library(ggrepel)
+library(dunn.test)
+```
+
+```{r}
+biomarkers <- read.csv("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Input/2025_upd/Sepsis_samples.csv", na.strings = "NaN")
+
+demographics <- read.csv("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Input/sourcedata_clinical_brain_fixed_20240505.csv")
+
+#controls <- read.csv("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Input/Controls_upd.csv")
+
+controls <- read.csv("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Input/2025_upd/Controls_Plasma.csv", na.strings = "NaN")
+```
+
+
+```{r}
+##one removed as spurious result
+
+biomarkers$level <- ifelse(biomarkers$Patient_num=="RIE-10" & biomarkers$Time=="1", NA, biomarkers$level)
+
+```
+
+```{r}
+gfap <- subset(biomarkers, biomarkers$Biomarker=="GFAP")
+
+tau <- subset(biomarkers, biomarkers$Biomarker=="TAU")
+
+nfl <- subset(biomarkers, biomarkers$Biomarker=="NFL")
+
+uch <- subset(biomarkers, biomarkers$Biomarker=="UCH")
+
+pTau_filtered <- subset(biomarkers, biomarkers$Biomarker=="pTau217")
+
+gfap$result <- ifelse(is.na(gfap$level), gfap$Repeat_level, gfap$level)
+nfl$result <- ifelse(is.na(nfl$level), nfl$Repeat_level, nfl$level)
+tau$result <- ifelse(is.na(tau$level), tau$Repeat_level, tau$level) 
+uch$result <- ifelse(is.na(uch$level), uch$Repeat_level, uch$level)
+pTau_filtered$result <- pTau_filtered$level
+
+Sepsis_long <- rbind(gfap, nfl,tau, uch, pTau_filtered)
+
+#Sepsis_long <- subset(Sepsis_long, Sepsis_long$Time=="1")
+```
+
+```{r}
+Sepsis_long <- subset(Sepsis_long, !Sepsis_long$Patient_num=="CNT.1")
+
+Sepsis_long$Time <- paste("T", Sepsis_long$Time, sep = "")
+
+time_samples <- demographics %>% select(c(study_id, mins_from_baseline, timepoint))
+
+demographics <- subset(demographics, !is.na(demographics$difftime_baseline))
+basic_demographics <- demographics %>% select(c(study_id,age,  survived_90, critcare_ever, ward_LOS, total_LOS, composite_deterioration, pres_lactate, news_score, pres_gcs, pres_bp_systolic, cns_infection, organism_bloodculture, pres_MAP, difftime_baseline, difftime_baseline_to_T2, difftime_baseline_to_T3, allocation))
+basic_demographics <- unique(basic_demographics)
+```
+
+
+```{r}
+
+sepsis_samples <- Sepsis_long %>% select(c(Biomarker, result, Time, Patient_num))
+sepsis_samples <- unique(sepsis_samples)
+sepsis_samples <- sepsis_samples %>%
+  pivot_wider(names_from = Biomarker, values_from = result)
+
+sepsis_samples <- merge(sepsis_samples, time_samples, by.x = c("Patient_num", "Time"), by.y = c("study_id", "timepoint"), all.x=T)
+
+#sepsis_samples <- subset(sepsis_samples, !is.na(sepsis_samples$GFAP))
+```
+
+```{r}
+controls <- subset(controls, controls$patient_type=="BioResource Control")
+#controls$patient_type <- "Non-Infected Control"
+
+controls$patient_type <- "Non-Infected Control"
+controls$GFAP <- controls$GFAP
+controls$NFL <- controls$NfL
+controls$TAU <- controls$Tau
+controls$UCHL1 <- controls$UCHL1
+controls$Time <- "Non-Infected Control"
+controls$Time <- as.factor(controls$Time)
+controls$Time_to_sample <- NA
+controls <- controls %>% select(c("Patient_ID", "patient_type", "Time_to_sample", "Time", "GFAP", "NFL", "UCHL1", "TAU", "Age", "Sex"))
+
+#sepsis_samples <- na.omit(sepsis_samples) #remove those with NA
+sepsis_samples$patient_type <- "Suspected sepsis"
+sepsis_samples$Patient_ID <- sepsis_samples$Patient_num
+sepsis_samples$Time <- sepsis_samples$Time
+sepsis_samples$Time <- as.factor(sepsis_samples$Time)
+Sepsis_age <- basic_demographics %>% select(c("study_id", "age"))
+Sepsis_age$Age <- Sepsis_age$age
+Sepsis_age <- Sepsis_age %>% select(-c("age"))
+Sepsis_age <- unique(Sepsis_age)
+sepsis_samples <- merge(Sepsis_age, sepsis_samples, by.x="study_id", by.y="Patient_ID", all.y=T)
+sepsis_samples$Patient_ID <- sepsis_samples$study_id
+sepsis_samples$Time_to_sample <- sepsis_samples$mins_from_baseline
+sepsis_samples$UCHL1 <- sepsis_samples$UCH
+
+sex_sepsis <- sourcedata_clinical_ABC %>% select(c(study_id,sex_at_birth))
+
+sepsis_samples <- merge(sepsis_samples, sex_sepsis, by.x = "Patient_ID", by.y = "study_id", all.x=T)
+sepsis_samples$Sex <- sepsis_samples$sex_at_birth
+sepsis_samples <- sepsis_samples %>% select(c("Patient_ID", "patient_type", "Time_to_sample", "Time", "GFAP", "NFL", "TAU", "UCHL1", "Age", "Sex"))
+
+#sepsis_samples <- subset(sepsis_samples, !is.na(sepsis_samples$GFAP)&!is.na(sepsis_samples$NFL)&!is.na(sepsis_samples$TAU))
+sepsis_samples[is.na(sepsis_samples$GFAP), c("TAU", "NFL", "UCHL1")] <- NA
+
+overall <- rbind(controls, sepsis_samples)
+
+overall$Sex <- ifelse(overall$Sex == "female", "F", 
+                      ifelse(overall$Sex == "male", "M", overall$Sex))
+
+overall_T1 <- subset(overall, Time == "T1" | Time == "Non-Infected Control")
+```
+
+```{r}
+GfLLOQ <- subset(overall, overall$GFAP<9.38)
+NFLLOQ <- subset(overall, overall$NFL<0.5)
+TauLLOq <- subset(overall, overall$TAU<0.125)
+UCHLLOQ <- subset(overall, overall$UCHL1<9.38)
+```
+
+#1 Demographics
+
+```{r}
+sepsis_samples_demo <- merge(sepsis_samples, basic_demographics, by.x = "Patient_ID", by.y="study_id", all.x = T)
+```
+
+
+##demographics
+
+```{r}
+
+demographics_time_1 <- subset(demographics, demographics$timepoint=="T1")
+
+myVars <- c("age", "news_score", "pres_lactate", "pres_MAP",  "pres_gcs", "cns_infection", "organism_bloodculture", "total_LOS","survived_90", "composite_deterioration")
+
+catVars <- c("survived_90", "composite_deterioration", "pres_gcs")
+non <- c("pres_lactate", "news_score", "age", "total_LOS", "pres_MAP")
+
+together_tab <- CreateTableOne(vars = myVars, factorVars = catVars, data = demographics_time_1)
+together_tab <- print(together_tab, nonnormal = non)
+together_tab
+
+write.csv(together_tab, "~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/Sepsis_demographics.csv")
+
+
+```
+
+```{r}
+
+library(gtsummary)
+
+tab1 <- sourcedata_clinical_ABC %>%
+
+  mutate(any_critcare = ifelse(l_of_sty_hdu_icu > 0, 1, 0),
+
+         unplnnd_readmssn_90 = ifelse(is.na(unplnnd_readmssn_90), 0, unplnnd_readmssn_90)) %>%
+
+  dplyr::select(
+
+                    age, sex_at_birth,
+
+                    comorb_copd, comorb_diab, comorb_mi, comorb_hrtfail, comorb_cancer, comorb_stroke, comorb_pvd, comorb_ckd, comorb_dementia,
+
+                    pres_lactate, pres_temp, news_score, pres_new_confusion,
+
+                    l_of_sty_ward_lvl, any_critcare, l_of_sty_hdu_icu,
+
+                    unplnnd_readmssn_30, unplnnd_readmssn_90, fu_pt_dead_yesno.x) %>%
+
+  tbl_summary(
+
+              label = list(
+
+                age ~ "Age (yrs)",
+
+                sex_at_birth ~ "Sex",
+
+                comorb_cancer ~ "Cancer",
+
+                comorb_mi ~ "Previous myocardial infarction",
+
+                comorb_hrtfail ~ "Heart failure",
+
+                comorb_copd ~ "COPD",
+
+                comorb_ckd ~ "Chronic kidney disease",
+
+                comorb_dementia ~ "Dementia",
+
+                comorb_stroke ~ "Previous stroke",
+
+                comorb_diab ~ "Diabetes",
+
+                comorb_pvd ~ "Peripheral vascular disease",
+
+                pres_lactate ~ "Lactate at presentation (mmol/L)",
+
+                pres_temp ~ "Temperature at presentation (ºC)",
+
+                pres_new_confusion ~ "New confusion at presentation",
+
+                news_score ~ "Initial NEWS score",
+
+                l_of_sty_ward_lvl ~ "Mean length of stay at ward level (days)",
+
+                any_critcare ~ "Ever admitted to critical care",
+
+                l_of_sty_hdu_icu ~ "Mean length of stay in critical care (days)",
+
+                unplnnd_readmssn_30  ~ "Readmission at 30 days",
+
+                unplnnd_readmssn_90 ~ "Readmission at 90 days",
+
+                fu_pt_dead_yesno.x  ~ "90 day mortality"),
+
+              type = list(
+
+                pres_lactate ~ "continuous",
+
+                news_score ~ "continuous",
+
+                l_of_sty_ward_lvl ~ "continuous",
+
+                l_of_sty_hdu_icu ~ "continuous"),
+
+              statistic = list(
+
+                age ~ "{mean} ({sd})",
+
+                pres_lactate ~ "{mean} ({sd})",
+
+                pres_temp ~ "{mean} ({sd})",
+
+                news_score ~ "{median} ({min}, {max})",
+
+                l_of_sty_ward_lvl ~ "{mean} ({sd})",
+
+                l_of_sty_hdu_icu ~ "{mean} ({sd})"),
+
+              digits = list(
+
+                age ~ 1,
+
+                pres_lactate ~ 1,
+
+                pres_temp ~ 1,
+
+                news_score ~ 0,
+
+                l_of_sty_ward_lvl ~ 1,
+
+                l_of_sty_hdu_icu ~ 1))
+
+
+  tab1 <- as.data.frame(tab1)
+  tab1
+
+Stroke <- subset(sourcedata_clinical_ABC, sourcedata_clinical_ABC$comorb_stroke==1)  
+  
+write.csv(tab1, "~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/summary_data_extended.csv", row.names = FALSE)
+```
+
+#Longitudinal
+
+```{r}
+sepsis_samples$Time_to_sample_hours <- sepsis_samples$Time_to_sample/60
+
+## Vector of variables to summarize
+myVars <- c("GFAP", "NFL", "TAU", "UCHL1", "Time_to_sample_hours")
+## Vector of categorical variables that need transformation
+non <- c("GFAP", "NFL","TAU", "UCHL1", "Time_to_sample_hours")
+## Create a TableOne object
+together_tab <- CreateTableOne(vars = myVars, data = sepsis_samples, strata = "Time")
+together_tab <- print(together_tab, nonnormal = non)
+
+library(lme4)
+library(lmerTest)
+
+model1 <- lmer(log(GFAP) ~ Time_to_sample_hours + (1 | Patient_ID), data = sepsis_samples)
+summary(model1)
+plot(model1)
+model2 <- lmer(log(NFL) ~ Time_to_sample_hours + (1 | Patient_ID), data = sepsis_samples)
+summary(model2)
+plot(model2)
+model3 <- lmer(log(TAU) ~ Time_to_sample_hours + (1 | Patient_ID), data = sepsis_samples)
+summary(model3)
+plot(model3)
+model4 <- lmer(log(UCHL1) ~ Time_to_sample_hours + (1 | Patient_ID), data = sepsis_samples)
+summary(model4)
+plot(model4)
+```
+
+```{r}
+sepsis_samples_1 <- subset(sepsis_samples, sepsis_samples$Time=="T1")
+median(sepsis_samples_1$GFAP, na.rm = T)
+
+summary_stats <- function(x) {
+  time_val <- unique(sepsis_samples$Time)
+  summary_df <- data.frame(Time = character(),
+                           median = numeric(),
+                           ymin = numeric(),
+                           ymax = numeric(),
+                           stringsAsFactors = FALSE)
+  
+  for (time in time_val) {
+    subset_data <- x[sepsis_samples$Time == time]
+    median_val <- median(subset_data, na.rm = TRUE)
+    lower_val <- quantile(subset_data, 0.25, na.rm = TRUE)
+    upper_val <- quantile(subset_data, 0.75, na.rm = TRUE)
+    
+    summary_df <- rbind(summary_df, data.frame(Time = time,
+                                               median = median_val,
+                                               ymin = lower_val,
+                                               ymax = upper_val))
+  }
+  
+  return(summary_df)
+}
+
+GFAP_dot_data <- summary_stats(sepsis_samples$GFAP)
+
+
+GFAP_dot_plot <- ggplot(GFAP_dot_data, aes(x = Time, y = median)) +
+  geom_point(size = 5) +  # Increased dot size to 5
+  geom_errorbar(aes(ymin = ymin, ymax = ymax), linewidth = 1, width = 0.2) + 
+  geom_line(aes(group = 1), linewidth = 1, color = "black") +  
+  labs(x = "Time", y = "GFAP (pg/ml)") +  
+  theme_classic() +
+  scale_y_continuous(limits = c(0, 350), name = "GFAP (pg/ml)") +  
+  theme(axis.text = element_text(size = 16),
+        axis.title = element_text(size = 18))
+
+GFAP_dot_plot
+```
+
+```{r}
+NFL_dot_data <- summary_stats(sepsis_samples$NFL)
+
+
+NFL_dot_plot <- ggplot(NFL_dot_data, aes(x = Time, y = median)) +
+  geom_point(size = 5) +  # Increased dot size to 5
+  geom_errorbar(aes(ymin = ymin, ymax = ymax), linewidth = 1, width = 0.2) + 
+  geom_line(aes(group = 1), linewidth = 1, color = "black") +  
+  labs(x = "Time", y = "NFL (pg/ml)") +  
+  theme_classic() +
+  scale_y_continuous(limits = c(0, 50), name = "NFL (pg/ml)") +  
+  theme(axis.text = element_text(size = 16),
+        axis.title = element_text(size = 18))
+
+NFL_dot_plot
+```
+
+```{r}
+TAU_dot_data <- summary_stats(sepsis_samples$TAU)
+
+
+TAU_dot_plot <- ggplot(TAU_dot_data, aes(x = Time, y = median)) +
+  geom_point(size = 5) +  # Increased dot size to 5
+  geom_errorbar(aes(ymin = ymin, ymax = ymax), linewidth = 1, width = 0.2) + 
+  geom_line(aes(group = 1), linewidth = 1, color = "black") +  
+  labs(x = "Time", y = "TAU (pg/ml)") +  
+  theme_classic() +
+  scale_y_continuous(limits = c(0, 10), name = "TAU (pg/ml)") +  
+  theme(axis.text = element_text(size = 16),
+        axis.title = element_text(size = 18))
+
+TAU_dot_plot
+
+```
+
+```{r}
+UCH_dot_data <- summary_stats(sepsis_samples$UCHL1)
+
+
+UCH_dot_plot <- ggplot(UCH_dot_data, aes(x = Time, y = median)) +
+  geom_point(size = 5) +  # Increased dot size to 5
+  geom_errorbar(aes(ymin = ymin, ymax = ymax), linewidth = 1, width = 0.2) + 
+  geom_line(aes(group = 1), linewidth = 1, color = "black") +  
+  labs(x = "Time", y = "UCH-L1 (pg/ml)") +  
+  theme_classic() +
+  scale_y_continuous(limits = c(0, 60), name = "UCH-L1 (pg/ml)") +  
+  theme(axis.text = element_text(size = 16),
+        axis.title = element_text(size = 18))
+
+UCH_dot_plot
+```
+
+
+```{r}
+library(cowplot)
+All_dot_plot <- cowplot::plot_grid(GFAP_dot_plot, NFL_dot_plot, TAU_dot_plot, UCH_dot_plot, ncol = 2)
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/All_Biomarkers_individual_longitudinal.jpg", plot = All_dot_plot, device = "jpg", width = 15, height = 7.5, units = "in", dpi = 300)
+
+overall_longitudinal <- overall
+overall <- subset(overall, overall$Time=="Non-Infected Control" | overall$Time=="T1")
+```
+
+##Correlations
+
+```{r}
+testing_datframe <- subset(overall, overall$patient_type=="Suspected sepsis")
+Biom_just <- testing_datframe %>% select(GFAP, NFL, TAU, UCHL1)
+
+mycor <- function(x, ...) {
+  r <- apply(x, 2, function(j) {
+    apply(x, 2, function(i) {
+      cor_result <- cor.test(i, j, method = "spearman", ...)
+      as.numeric(cor_result$estimate)
+    })
+  })
+  
+  P <- apply(x, 2, function(j) {
+    apply(x, 2, function(i) {
+      cor_result <- cor.test(i, j, method = "spearman", ...)
+      as.numeric(cor_result$p.value)
+    })
+  })
+  
+  out <- list()
+  out$P <- round(P, 3)
+  out$r <- round(r, 3)
+  return(out)
+}
+
+a <- mycor(Biom_just)
+
+correlations <- a$r
+p_values <- a$P
+
+correlations <- as.data.frame(correlations)
+p_values <- as.data.frame(p_values)
+
+
+new_labels <- c("GFAP", "NFL", "total tau", "UCH-L1")
+
+colnames(correlations) <- new_labels
+rownames(correlations) <- new_labels
+
+colnames(p_values) <- new_labels
+rownames(p_values) <- new_labels
+
+corr_with_stars <- matrix("", nrow = nrow(correlations), ncol = ncol(correlations))
+
+
+for (i in 1:nrow(correlations)) {
+  for (j in 1:ncol(correlations)) {
+  
+    star <- ifelse(p_values[i, j] < 0.05, "*", "")
+    corr_with_stars[i, j] <- paste0(correlations[i, j], star)
+  }
+}
+
+
+png(
+  "~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/Biomarker_correlations.png",
+  width = 17,
+  height = 17,
+  units = "cm",
+  res = 300
+)
+
+par(mar = c(5, 4, 4, 6))  # increase right margin
+
+corrplot(
+  as.matrix(correlations),
+  method = "circle",
+  type = "upper",
+  order = "hclust",
+  addCoef.col = "black",
+  tl.col = "black",
+  tl.srt = 45,
+  sig.level = 0.05,
+  insig = "pch",
+  diag = FALSE,
+  number.cex = 1,
+  tl.cex = 1,
+  cl.pos = "r"
+)
+
+mtext(
+  "Spearman's correlation coefficient",
+  side = 4,
+  line = 4.2,
+  cex = 1
+)
+
+dev.off()
+
+
+
+write.csv(correlations, "~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/Biom_correlations_R.csv")
+write.csv(p_values, "~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/Biom_correlations_P.csv")
+```
+
+##COmparison to helathy controls
+
+```{r}
+
+wilcox.test(overall$GFAP~overall$patient_type, exact = FALSE)
+wilcox.test(overall$NFL~overall$patient_type, exact = FALSE)
+wilcox.test(overall$TAU~overall$patient_type, exact = FALSE)
+wilcox.test(overall$UCHL1~overall$patient_type, exact = FALSE)
+```
+
+```{r}
+overall$logGFAP <- log(overall$GFAP)
+overall$logNFL <- log(overall$NFL)
+overall$logTau <- log(overall$TAU)
+overall$logUCHL1 <- log(overall$UCHL1)
+
+overall$patient_type[overall$patient_type == "Sepsis"] <- "Suspected sepsis"
+
+bxp <- ggboxplot(
+  overall, x = "patient_type", y = "logGFAP", 
+  ylab = "log(GFAP) (pg/ml)", xlab = "Groups", add = "jitter", outlier.shape = NA
+  ) +
+  labs(title = "GFAP",   
+       x = "Groups",                                         
+       y = "log(GFAP) (pg/ml)") +                                 
+  theme(axis.text = element_text(size = 18),                 
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_blank(),
+        plot.title = element_text(size = 20, face = "bold"))  +
+  ylim(2, 8)
+
+
+
+GFAP_plot <- bxp + stat_compare_means(
+  method = "wilcox.test", 
+  label = "p.label", 
+  comparisons = list(c("Suspected sepsis", "Non-Infected Control")), # Adjust according to your group names
+ label.y = 7, 
+  size = 10 
+)
+
+GFAP_plot
+```
+
+```{r}
+wilcox_res <- wilcox.test(overall$GFAP ~ overall$patient_type, exact = FALSE)
+wilcox_res
+
+W_val <- round(wilcox_res$statistic, 2)
+p_val <- round(wilcox_res$p.value, 3)
+
+label_text <- paste0("p = ", p_val)
+
+GFAP_plot <- ggboxplot(
+  overall, x = "patient_type", y = "logGFAP",
+  ylab = "log(GFAP) (pg/ml)", xlab = "Groups", add = "jitter", outlier.shape = NA
+) +
+  labs(
+    title = "GFAP",
+    x = "Groups",
+    y = "log(GFAP) (pg/ml)"
+  ) +
+  theme(
+    axis.text = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 16, face = "bold")
+  ) +
+  ylim(2, 8) +
+
+  geom_segment(aes(x = 1, xend = 2, y = 7.2, yend = 7.2), linewidth = 0.8) +
+  geom_segment(aes(x = 1, xend = 1, y = 7.2, yend = 7.0), linewidth = 0.8) +
+  geom_segment(aes(x = 2, xend = 2, y = 7.2, yend = 7.0), linewidth = 0.8) +
+
+  annotate("text", x = 1.5, y = 7.8, label = label_text, size = 4)
+
+GFAP_plot
+
+```
+
+
+
+```{r}
+bxp <- ggboxplot(
+  overall, x = "patient_type", y = "logNFL", 
+  ylab = "NfL (pg/ml)", xlab = "Groups", add = "jitter", outlier.shape = NA
+  ) +
+  labs(title = "NfL",   
+       x = "Groups",                                         
+       y = "log(NfL) (pg/ml)") +                                 
+  theme(axis.text = element_text(size = 18),                 
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_blank(),
+        plot.title = element_text(size = 20, face = "bold")) +
+  ylim(0, 8)
+  bxp
+NFL_plot <- bxp + stat_compare_means(
+  method = "wilcox.test", 
+  label = "p.label",
+  comparisons = list(c("Suspected sepsis", "Non-Infected Control")), # Adjust according to your group names
+  label.y = 7, 
+  size = 10
+)
+  
+NFL_plot 
+```
+
+```{r}
+wilcox_res <- wilcox.test(overall$NFL ~ overall$patient_type, exact = FALSE)
+wilcox_res
+
+W_val <- round(wilcox_res$statistic, 2)
+p_val <- round(wilcox_res$p.value, 3)
+
+
+label_text <- paste0("p = ", p_val)
+
+
+NFL_plot <- ggboxplot(
+  overall, x = "patient_type", y = "logNFL",
+  ylab = "log(NfL) (pg/ml)", xlab = "Groups", add = "jitter", outlier.shape = NA
+) +
+  labs(
+    title = "NfL",
+    x = "Groups",
+    y = "log(NfL) (pg/ml)"
+  ) +
+  theme(
+    axis.text = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 16, face = "bold")
+  )+
+  ylim(2, 8) +
+
+  geom_segment(aes(x = 1, xend = 2, y = 7.2, yend = 7.2), linewidth = 0.8) +
+  geom_segment(aes(x = 1, xend = 1, y = 7.2, yend = 7.0), linewidth = 0.8) +
+  geom_segment(aes(x = 2, xend = 2, y = 7.2, yend = 7.0), linewidth = 0.8) +
+
+  annotate("text", x = 1.5, y = 7.8, label = label_text, size = 4)
+
+NFL_plot
+```
+
+
+
+```{r}
+bxp <- ggboxplot(
+  overall, x = "patient_type", y = "logTau", 
+  ylab = "Tau (pg/ml)", xlab = "Groups", add = "jitter"
+  ) +
+  labs(title = "total tau",   
+       x = "Groups",                                         
+       y = "log(total tau) (pg/ml)") +                                 
+  theme(axis.text = element_text(size = 18),                 
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_blank(),
+        plot.title = element_text(size = 20, face = "bold")) +
+  ylim(0, 8)
+  bxp
+TAU_plot <- bxp + stat_compare_means(
+  method = "wilcox.test", 
+  label = "p.format",
+  comparisons = list(c("Suspected sepsis", "Non-Infected Control")), # Adjust according to your group names
+  label.y = 6,
+  size = 10
+)
+  TAU_plot
+```
+
+```{r}
+wilcox_res <- wilcox.test(overall$TAU ~ overall$patient_type, exact = FALSE)
+wilcox_res
+
+W_val <- round(wilcox_res$statistic, 2)
+p_val <- round(wilcox_res$p.value, 3)
+
+
+label_text <- paste0("p = ", p_val)
+
+
+TAU_plot <- ggboxplot(
+  overall, x = "patient_type", y = "logTau",
+  ylab = "log(total tau) (pg/ml)", xlab = "Groups", add = "jitter", outlier.shape = NA
+) +
+  labs(title = "total tau",   
+       x = "Groups",                                         
+       y = "log(total tau) (pg/ml)") +
+  theme(
+    axis.text = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 16, face = "bold")
+  ) +
+  ylim(0, 8) +
+
+  geom_segment(aes(x = 1, xend = 2, y = 6.2, yend = 6.2), linewidth = 0.8) +
+  geom_segment(aes(x = 1, xend = 1, y = 6.2, yend = 6.0), linewidth = 0.8) +
+  geom_segment(aes(x = 2, xend = 2, y = 6.2, yend = 6.0), linewidth = 0.8) +
+
+  annotate("text", x = 1.5, y = 6.8, label = label_text, size = 4)
+
+TAU_plot
+```
+
+
+
+```{r}
+bxp <- ggboxplot(
+  overall, x = "patient_type", y = "logUCHL1", 
+  ylab = "UCH-L1 (pg/ml)", xlab = "Groups", add = "jitter"
+  ) +
+  labs(title = "UCH-L1",   
+       x = "Groups",                                         
+       y = "log(UCH-L1) (pg/ml)") +                                 
+  theme(axis.text = element_text(size = 18),                 
+        axis.title.y = element_text(size = 20),
+        axis.title.x = element_blank(),
+        plot.title = element_text(size = 20, face = "bold")) +
+  ylim(0,8)
+  bxp
+UCH_plot <- bxp + stat_compare_means(
+  method = "wilcox.test", 
+  label = "p.format", 
+  comparisons = list(c("Suspected sepsis", "Non-Infected Control")), 
+  label.y = 7,
+  size = 10
+)
+  UCH_plot
+
+```
+
+```{r}
+wilcox_res <- wilcox.test(overall$UCHL1 ~ overall$patient_type, exact = FALSE)
+wilcox_res
+
+W_val <- round(wilcox_res$statistic, 2)
+p_val <- round(wilcox_res$p.value, 3)
+
+
+label_text <- paste0("p = ", p_val)
+
+
+UCH_plot <- ggboxplot(
+  overall, x = "patient_type", y = "logUCHL1", 
+  ylab = "UCH-L1 (pg/ml)", xlab = "Groups", add = "jitter", outlier.shape = NA
+  ) +
+  labs(title = "UCH-L1",   
+       x = "Groups",                                         
+       y = "log(UCH-L1) (pg/ml)") +
+  theme(
+    axis.text = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 16, face = "bold")
+  ) +
+  ylim(0, 8) +
+
+  geom_segment(aes(x = 1, xend = 2, y = 6.2, yend = 6.2), linewidth = 0.8) +
+  geom_segment(aes(x = 1, xend = 1, y = 6.2, yend = 6.0), linewidth = 0.8) +
+  geom_segment(aes(x = 2, xend = 2, y = 6.2, yend = 6.0), linewidth = 0.8) +
+
+  annotate("text", x = 1.5, y = 6.8, label = label_text, size = 4)
+
+UCH_plot
+
+Uni_plot <- cowplot::plot_grid(GFAP_plot, NFL_plot, TAU_plot,UCH_plot,ncol = 2,
+  labels = c("A", "B", "C", "D"),
+  label_size = 16)
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/Univariate_plot.jpg", plot = Uni_plot, device = "jpg", width = 17, height = 17, units = "cm", dpi = 300)
+```
+
+###Severity
+
+```{r}
+mean_demo <- subset(overall, overall$patient_type=="Suspected sepsis")
+mean_demo<- merge(mean_demo, basic_demographics, by.x="Patient_ID", by.y="study_id")
+
+mean_demo_lon <- subset(overall_longitudinal, overall_longitudinal$patient_type=="Suspected sepsis")
+mean_demo_lon<- merge(mean_demo_lon, basic_demographics, by.x="Patient_ID", by.y="study_id")
+
+RR <- sourcedata_clinical_full %>% select(c(study_id, `Baseline obs RR`, `Baseline obs oxygen`))
+RR <- unique(RR)
+RR <- subset(RR, !is.na(RR$`Baseline obs RR`))
+
+mean_demo<- merge(mean_demo, RR, by.x="Patient_ID", by.y="study_id")
+
+mean_demo$SOFA <- 0
+mean_demo$SOFA[mean_demo$pres_gcs < 15] <- mean_demo$SOFA[mean_demo$pres_gcs < 15] + 1
+mean_demo$SOFA[mean_demo$`Baseline obs RR` >= 22] <- mean_demo$SOFA[mean_demo$`Baseline obs RR` >= 22] + 1
+mean_demo$SOFA[mean_demo$pres_bp_systolic <= 100] <- mean_demo$SOFA[mean_demo$pres_bp_systolic <= 100] + 1
+table(mean_demo$SOFA)
+check <- mean_demo %>% select(c(SOFA, pres_gcs, pres_bp_systolic, `Baseline obs RR`))
+
+cor.test(x=mean_demo$GFAP, y=mean_demo$pres_lactate, method = 'spearman')
+
+GFAP_lactate_scatter <- ggscatter(mean_demo, x = "GFAP", y = "pres_lactate",
+          shape = 16, size = 3,
+          xlab = "GFAP (pg/ml)",
+          ylab = "Admission Lactate") +
+  theme(strip.text = element_text(size = 18),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 18), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 18)) +
+  ylim(0, 10)
+GFAP_lactate_scatter <- GFAP_lactate_scatter + stat_cor(method = "spearman", cor.coef.name="rho", size = 6) 
+
+cor.test(x=mean_demo$NFL, y=mean_demo$pres_lactate, method = 'spearman')
+NFL_lactate_scatter <- ggscatter(mean_demo, x = "NFL", y = "pres_lactate",
+          shape = 16, size = 3,
+          xlab = "NFL(pg/ml)",
+          ylab = "Admission Lactate") +
+  theme(strip.text = element_text(size = 18),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 18), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 18)) +
+  ylim(0, 10) + xlim(0,90)
+NFL_lactate_scatter <- NFL_lactate_scatter + annotate("text", x=30, y=9.5, label= "ρ = -0.16, p=0.46", size=6)
+
+
+cor.test(x=mean_demo$TAU, y=mean_demo$pres_lactate, method = 'spearman')
+TAU_lactate_scatter<- ggscatter(mean_demo, x = "TAU", y = "pres_lactate",
+          shape = 16, size = 3,
+          xlab = "Tau (pg/ml)",
+          ylab = "Admission Lactate") +
+  theme(strip.text = element_text(size = 18),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 18), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 18)) +
+  ylim(0, 10) + xlim(0,20)
+TAU_lactate_scatter <- TAU_lactate_scatter + annotate("text", x=7, y=9.5, label= "ρ = 0.15, p=0.48", size=6)
+
+cor.test(x=mean_demo$UCHL1, y=mean_demo$pres_lactate, method = 'spearman')
+UCH_lactate_scatter <- ggscatter(mean_demo, x = "UCHL1", y = "pres_lactate",
+          shape = 16, size = 3,
+          xlab = "UCH-L1 (pg/ml)",
+          ylab = "Admission Lactate") +
+  theme(strip.text = element_text(size = 18),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 18), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 18)) +
+  ylim(0, 10) 
+UCH_lactate_scatter <- UCH_lactate_scatter + annotate("text", x=100, y=9.5, label= "ρ = 0.16, p=0.47", size=6)
+
+
+Lactate_plot <- cowplot::plot_grid(GFAP_lactate_scatter, NFL_lactate_scatter, TAU_lactate_scatter,UCH_lactate_scatter, ncol = 2,
+  labels = c("A", "B", "C", "D"),
+  label_size = 20)
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/Lactate_correlations_longitudinal.jpg", plot = Lactate_plot, device = "jpg", width = 10, height = 10, units = "in", dpi = 300)
+```
+
+```{r}
+cor.test(x=mean_demo$GFAP, y=mean_demo$news_score, method = 'spearman')
+
+cor.test(x=mean_demo$GFAP, y=mean_demo$news_score, method = 'spearman')
+GFAP_news <- ggscatter(mean_demo, x = "GFAP", y = "news_score",
+          shape = 16, size = 3,
+          xlab = "GFAP (pg/ml)",
+          ylab = "NEWS score") +
+  theme(strip.text = element_text(size = 18),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 18), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 18)) +
+  ylim(4, 14)
+
+GFAP_news
+GFAP_news <- GFAP_news + annotate("text", x=175, y=13, label= "ρ = -0.18, p=0.42", size=6)
+
+cor.test(x=mean_demo$NFL, y=mean_demo$news_score, method = 'spearman')
+NFL_news <- ggscatter(mean_demo, x = "NFL", y = "news_score",
+          shape = 16, size = 3,
+          xlab = "NFL(pg/ml)",
+          ylab = "NEWS score") +
+  theme(strip.text = element_text(size = 18),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 18), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 18)) +
+  ylim(4, 14) + xlim(0,90)
+NFL_news <- NFL_news + annotate("text", x=30, y=13, label= "ρ = -0.22, p=0.32", size=6)
+
+cor.test(x=mean_demo$TAU, y=mean_demo$news_score, method = 'spearman')
+TAU_news<- ggscatter(mean_demo, x = "TAU", y = "news_score",
+          shape = 16, size = 3,
+          xlab = "Tau (pg/ml)",
+          ylab = "NEWS score") +
+  theme(strip.text = element_text(size = 18),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 18), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 18)) +
+  ylim(4, 14) + xlim(0,20)
+TAU_news <- TAU_news + annotate("text", x=7, y=13, label= "ρ = 0.15, p=0.49", size=6)
+
+cor.test(x=mean_demo$UCHL1, y=mean_demo$news_score, method = 'spearman')
+UCH_news <- ggscatter(mean_demo, x = "UCHL1", y = "news_score",
+          shape = 16, size = 3,
+          xlab = "UCH-L1 (pg/ml)",
+          ylab = "NEWS score") +
+  theme(strip.text = element_text(size = 18),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 18), 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 18)) +
+  ylim(4, 14) 
+UCH_news <- UCH_news + annotate("text", x=100, y=13, label= "ρ = -0.31, p=0.15", size=6)
+
+
+NEWS_plot <- cowplot::plot_grid(GFAP_news, NFL_news, TAU_news,UCH_news, ncol = 2,
+  labels = c("A", "B", "C", "D"),
+  label_size = 20)
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/NEWS_correlations_longitudinal.jpg", plot = NEWS_plot, device = "jpg", width = 10, height = 10, units = "in", dpi = 300)
+```
+
+##qSOFA
+
+```{r}
+mean_demo$SOFA_Bin <- ifelse(mean_demo$SOFA>=2, 1,0)
+mean_demo$SOFA_Bin <- as.factor(mean_demo$SOFA_Bin)
+
+
+mean_demo$logGFAP <- log(mean_demo$GFAP)
+mean_demo$logNFL <- log(mean_demo$NFL)
+mean_demo$logTau <- log(mean_demo$TAU)
+mean_demo$logUCHL1 <- log(mean_demo$UCHL1)
+
+bxp <- ggplot(mean_demo, aes(x = SOFA_Bin, y = logGFAP)) +
+  geom_jitter(width = 0.2, size = 2, color = "black") +  # simple black dots
+  labs(title = "GFAP", x = "qSOFA score", y = "log(GFAP) (pg/ml)") +
+  scale_x_discrete(labels = c("0-1", "2-3")) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 10),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 16, face = "bold")
+  ) +
+  ylim(2, 8)
+
+GFAP_SOFA <- bxp
+GFAP_SOFA
+
+
+bxp <- ggplot(mean_demo, aes(x = SOFA_Bin, y = logNFL)) +
+  geom_jitter(width = 0.2, size = 2, color = "black") +  # simple black dots
+  labs(title = "NfL", x = "qSOFA score", y = "log(NfL) (pg/ml)") +
+  scale_x_discrete(labels = c("0-1", "2-3")) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 10),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 16, face = "bold")
+  )    +
+  ylim(0,8)
+  
+NFL_SOFA <- bxp 
+  
+NFL_SOFA
+
+bxp <- ggplot(mean_demo, aes(x = SOFA_Bin, y = logTau)) +
+  geom_jitter(width = 0.2, size = 2, color = "black") +  # simple black dots
+  labs(title = "total tau", x = "qSOFA score", y = "log(total tau) (pg/ml)") +
+  scale_x_discrete(labels = c("0-1", "2-3")) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 10),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 16, face = "bold")
+  )  +
+  ylim(0,8)   
+  bxp
+  
+TAU_SOFA <- bxp 
+
+bxp <- ggplot(mean_demo, aes(x = SOFA_Bin, y = logUCHL1)) +
+  geom_jitter(width = 0.2, size = 2, color = "black") +  # simple black dots
+  labs(title = "UCH-L1", x = "qSOFA score", y = "log(UCH-L1) (pg/ml)") +
+  scale_x_discrete(labels = c("0-1", "2-3")) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 10),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 16, face = "bold")
+  )  +
+  ylim(0,8)   
+  bxp
+  
+UCH_SOFA <- bxp 
+
+
+All_plot <- cowplot::plot_grid(GFAP_SOFA, NFL_SOFA,TAU_SOFA,UCH_SOFA, ncol = 2,
+  labels = c("A", "B", "C", "D"),
+  label_size = 16)
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/All_Biomarkers_SOFA.jpg", plot = All_plot, device = "jpg", width = 10, height = 10, units = "in", dpi = 300)
+```
+##Cytokines
+
+```{r}
+pca_wide <- sourcedata_cytokines_wide[, -c(1:6)]
+pca_wide <- pca_wide[, -c(19:23)]
+
+sourcedata_cytokines_wide <- sourcedata_cytokines_wide[, -c(1:6)]
+sourcedata_cytokines_wide <- sourcedata_cytokines_wide[, -c(19:23)]
+
+sepsis_neurodeg <- merge(mean_demo, sourcedata_cytokines_wide, by.x=c("Patient_ID","Time"), by.y = c("study_ID", "timepoint"), all.x = T)
+sepsis_neurodeg_lon <- merge(mean_demo_lon, sourcedata_cytokines_wide, by.x=c("Patient_ID","Time"), by.y = c("study_ID", "timepoint"), all.x = T)
+```
+
+
+```{r}
+T1 <- subset(sepsis_neurodeg, sepsis_neurodeg$Time=="T1")
+T1 <- subset(T1, !is.na(T1$GFAP))
+
+T1_cor <- T1 %>% select("TNF-alpha":"CCL4", "GFAP", "NFL", "TAU", "UCHL1")
+
+```
+
+#PCA
+
+```{r}
+library(factoextra)
+pca_df <- subset(pca_wide, pca_wide$timepoint=="T1")
+eid_column <- pca_df$study_ID
+
+pca_data <- pca_df %>% select("TNF-alpha":"CCL4")
+pca_data <- pca_data[complete.cases(pca_data),]
+
+eid_column <- eid_column[complete.cases(pca_data)]
+
+
+res.pca <- prcomp(pca_data, scale = TRUE)
+
+var_explained <- res.pca$sdev^2 / sum(res.pca$sdev^2)
+print(var_explained)
+scree_plot <- qplot(c(1:14), var_explained) + 
+  geom_line() + 
+  xlab("Principal Component") + 
+  ylab("Variance Explained") +
+  ggtitle("") +
+  ylim(0, 0.5) +
+  theme_classic()
+
+pca_pplot <- fviz_pca_var(res.pca, col.var = "black", repel = T)
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/PCA_plot.jpg", plot = pca_pplot, device = "jpg", width = 10, height = 10, units = "in", dpi = 300)
+pca_pplot
+scree_plot
+ggsave(filename = "~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/Scree_Plot.png", 
+       plot = scree_plot, 
+       width = 6, height = 4, dpi = 300)
+
+fviz_eig(res.pca)
+
+res.var <- get_pca_var(res.pca)
+res.var$coord  
+
+loadings <- res.pca$rotation
+pc1_loadings <- loadings[, 1]
+pc1_table <- data.frame(
+  Variable = rownames(loadings),
+  PC1_Loadings = pc1_loadings
+)
+
+pc2_loadings <- loadings[, 2]
+pc2_table <- data.frame(
+  Variable = rownames(loadings),
+  PC2_Loadings = pc2_loadings
+)
+
+write.csv(pc1_table, "~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/PC1_Loadings_Adjusted.csv", row.names = FALSE)
+View(pc1_table)
+View(pc2_table)
+pc1_scores <- res.pca$x[, 1]
+pc1_scores_df <- data.frame(
+  Patient_ID = eid_column,
+  PC1_Score = pc1_scores
+)
+
+T1_PCA_togther <- merge(pc1_scores_df, T1, by="Patient_ID")
+
+cor.test(x=T1_PCA_togther$GFAP, y=T1_PCA_togther$PC1_Score, method = 'spearman')
+cor.test(x=T1_PCA_togther$NFL, y=T1_PCA_togther$PC1_Score, method = 'spearman')
+cor.test(x=T1_PCA_togther$TAU, y=T1_PCA_togther$PC1_Score, method = 'spearman')
+cor.test(x=T1_PCA_togther$UCHL1, y=T1_PCA_togther$PC1_Score, method = 'spearman')
+```
+
+
+
+```{r}
+
+T1_GFAP <- T1 %>% select("GFAP", "IL-6","TNF-alpha":"CCL4")
+T1_NFL <- T1 %>% select("NFL", ,"IL-6","TNF-alpha":"CCL4")
+T1_TAU <- T1 %>% select( "TAU", "IL-6","TNF-alpha":"CCL4")
+T1_UCH <- T1 %>% select( "UCHL1", "IL-6","TNF-alpha":"CCL4")
+
+
+res <- outer(T1_GFAP, T1_GFAP, Vectorize(function(x, y) {
+  cor.test(x, y, method = 'spearman',exact=FALSE)$p.value
+})) |>
+as.table() |> as.data.frame() |> setNames(c("Var1", "Var2", "p")) 
+  
+res <- subset(res, res$Var2=="GFAP")
+res <- subset(res, !res$Var1=="GFAP")
+res$p_adj <- p.adjust(res$p, method = "fdr")
+
+rho <- outer(T1_GFAP, T1_GFAP, Vectorize(function(x, y) {
+  cor(x, y, method = 'spearman')
+}))
+
+rho <- as.data.frame(rho)
+rho <- rho %>% select(c(GFAP))
+rho <- subset(rho, rho$GFAP<0.999999999)
+GFAP_T1_correlation <- cbind(res, rho)
+
+GFAP_T1_correlation$log_p <- -log10(GFAP_T1_correlation$p_adj)
+GFAP_T1_correlation$Var1 <- as.character(GFAP_T1_correlation$Var1)
+
+threshold <- -log10(0.01)
+GFAP <- ggplot(GFAP_T1_correlation, aes(x = GFAP, y = log_p)) +
+  geom_point(aes(color = p_adj < 0.01), size = 1.5) +  
+  geom_hline(yintercept = threshold, color = "red", linetype = "dashed") +  
+  labs(x = "Spearmans Rho", y = "-log10(p-value)") +
+  ggtitle("GFAP") +
+  theme_classic() +  
+  scale_color_manual(values = c("black", "red")) +  
+  geom_text_repel(aes(label = Var1), 
+                  direction = "both", max.overlaps = Inf)  +  
+  theme(axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        plot.title = element_text(size=16),
+        legend.position = "none") + xlim(-0.5,1) + ylim(0,3)
+    GFAP    
+```
+
+```{r}
+res <- outer(T1_NFL, T1_NFL, Vectorize(function(x, y) {
+  cor.test(x, y, method = 'spearman',exact=FALSE)$p.value
+})) |>
+as.table() |> as.data.frame() |> setNames(c("Var1", "Var2", "p")) 
+  
+res <- subset(res, res$Var2=="NFL")
+res <- subset(res, !res$Var1=="NFL")
+res$p_adj <- p.adjust(res$p, method = "fdr")
+
+rho <- outer(T1_NFL, T1_NFL, Vectorize(function(x, y) {
+  cor(x, y, method = 'spearman')
+}))
+
+rho <- as.data.frame(rho)
+rho <- rho %>% select(c(NFL))
+rho <- subset(rho, rho$NFL<0.999999999)
+NFL_T1_correlation <- cbind(res, rho)
+
+NFL_T1_correlation$log_p <- -log10(NFL_T1_correlation$p_adj)
+
+NFL_T1_correlation$Var1 <- as.character(NFL_T1_correlation$Var1)
+
+threshold <- -log10(0.01)
+NFL <- ggplot(NFL_T1_correlation, aes(x = NFL, y = log_p)) +
+  geom_point(aes(color = p_adj < 0.01), size = 1.5) +  
+  geom_hline(yintercept = threshold, color = "red", linetype = "dashed") +  
+  labs(x = "Spearmans Rho", y = "-log10(p-value)") +
+  ggtitle("NfL") +
+  theme_classic() +  
+  scale_color_manual(values = c("black", "red")) +  
+   geom_text_repel(aes(label = Var1), 
+                  direction = "both", max.overlaps = Inf)  +  
+  theme(axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        plot.title = element_text(size=16),
+        legend.position = "none") + xlim(-0.5,1) + ylim(0,3)
+
+NFL
+```
+
+```{r}
+res <- outer(T1_TAU, T1_TAU, Vectorize(function(x, y) {
+  cor.test(x, y, method = 'spearman',exact=FALSE)$p.value
+})) |>
+as.table() |> as.data.frame() |> setNames(c("Var1", "Var2", "p")) 
+  
+res <- subset(res, res$Var2=="TAU")
+res <- subset(res, !res$Var1=="TAU")
+res$p_adj <- p.adjust(res$p, method = "fdr")
+
+rho <- outer(T1_TAU, T1_TAU, Vectorize(function(x, y) {
+  cor(x, y, method = 'spearman')
+}))
+
+rho <- as.data.frame(rho)
+rho <- rho %>% select(c(TAU))
+rho <- subset(rho, rho$TAU<0.999999999)
+TAU_T1_correlation <- cbind(res, rho)
+
+cor(T1_TAU$TAU, T1_TAU$CCL20, method = "spearman")
+
+TAU_T1_correlation$log_p <- -log10(TAU_T1_correlation$p_adj)
+
+TAU_T1_correlation$Var1 <- as.character(TAU_T1_correlation$Var1)
+
+threshold <- -log10(0.01)
+Tau <- ggplot(TAU_T1_correlation, aes(x = TAU, y = log_p)) +
+  geom_point(aes(color = p_adj < 0.01), size = 1.5) +  
+  geom_hline(yintercept = threshold, color = "red", linetype = "dashed") +  
+  labs(x = "Spearmans Rho", y = "-log10(p-value)") +
+  ggtitle("total tau") +
+  theme_classic() +  
+  scale_color_manual(values = c("black", "red")) +  
+  geom_text_repel(aes(label = Var1), 
+                  direction = "both", max.overlaps = Inf)  +  
+  theme(axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        plot.title = element_text(size=16),
+        legend.position = "none") + xlim(-0.5,1) + ylim(0,3)
+        
+Tau
+All_plot <- cowplot::plot_grid(GFAP, NFL,Tau, ncol = 3)
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/cytok_vol_mean.jpg", plot = All_plot, device = "jpg", width = 20, height = 8, units = "in", dpi = 300)
+```
+
+```{r}
+res <- outer(T1_UCH, T1_UCH, Vectorize(function(x, y) {
+  cor.test(x, y, method = 'spearman',exact=FALSE)$p.value
+})) |>
+as.table() |> as.data.frame() |> setNames(c("Var1", "Var2", "p")) 
+  
+res <- subset(res, res$Var2=="UCHL1")
+res <- subset(res, !res$Var1=="UCHL1")
+res$p_adj <- p.adjust(res$p, method = "fdr")
+
+rho <- outer(T1_UCH, T1_UCH, Vectorize(function(x, y) {
+  cor(x, y, method = 'spearman')
+}))
+
+rho <- as.data.frame(rho)
+rho <- rho %>% select(c(UCHL1))
+rho <- subset(rho, rho$UCHL1<0.999999999)
+UCH_T1_correlation <- cbind(res, rho)
+
+cor(T1_UCH$UCHL1, T1_UCH$CCL20, method = "spearman")
+
+UCH_T1_correlation$log_p <- -log10(UCH_T1_correlation$p_adj)
+
+UCH_T1_correlation$Var1 <- as.character(UCH_T1_correlation$Var1)
+
+threshold <- -log10(0.01)
+UCH <- ggplot(UCH_T1_correlation, aes(x = UCHL1, y = log_p)) +
+  geom_point(aes(color = p_adj < 0.01), size = 1.5) +  
+  geom_hline(yintercept = threshold, color = "red", linetype = "dashed") +  
+  labs(x = "Spearmans Rho", y = "-log10(p-value)") +
+  ggtitle("UCH-L1") +
+  theme_classic() +  
+  scale_color_manual(values = c("black", "red")) +  
+  geom_text_repel(aes(label = Var1), 
+                  direction = "both", max.overlaps = Inf)  +  
+  theme(axis.text = element_text(size = 10),
+        axis.title = element_text(size = 10),
+        plot.title = element_text(size=16),
+        legend.position = "none") + xlim(-0.5,1) + ylim(0,3)
+        
+UCH
+All_plot <- cowplot::plot_grid(GFAP, NFL,Tau,UCH, ncol = 2,  labels = c("A", "B", "C", "D"),
+  label_size = 14)
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/cytok_vol_mean.jpg", plot = All_plot, device = "jpg", width = 21, height = 17, units = "cm", dpi = 300)
+```
+
+
+
+##Sensitivity 1: Allocation
+
+```{r}
+wilcox.test(mean_demo$GFAP~mean_demo$allocation, exact = FALSE)
+
+wilcox.test(mean_demo$NFL~mean_demo$allocation, exact = FALSE)
+
+wilcox.test(mean_demo$TAU~mean_demo$allocation, exact = FALSE)
+
+wilcox.test(mean_demo$UCHL1~mean_demo$allocation, exact = FALSE)
+```
+
+
+##sensitivity 2 pulmonary 
+
+```{r}
+Discharge <- read.csv("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Input/discharge_diagnoses.csv")
+
+mean_demo <- merge(mean_demo, Discharge, by.x = "Patient_ID", by.y = "study_id", all.x = T)
+
+wilcox.test(mean_demo$TAU~mean_demo$Pulmonary_infection, exact = TRUE)
+
+mean_demo_disch_only <- subset(mean_demo, !is.na(mean_demo$Pulmonary_infection))
+
+bxp <- ggpubr::ggboxplot(
+  mean_demo_disch_only, x = "Pulmonary_infection", y = "TAU", 
+  ylab = "Tau (pg/ml)", xlab = "Groups", add = "jitter"
+  ) +
+  labs(title = "total tau",   
+       x = "Groups",                                         
+       y = "total tau (pg/ml)" )+                                 
+  theme(axis.text = element_text(size = 16),                 
+        axis.title.y = element_text(size = 16),
+        axis.title.x = element_blank(),
+        plot.title = element_text(size = 20, face = "bold"))    +
+          coord_cartesian(ylim = c(0,15))    
+  bxp
+  
+table(mean_demo$Pulmonary_infection)
+
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/Discharge_diagnosis.jpg", plot = bxp, device = "jpg", dpi = 300)
+```
+
+##Sensitivity 3 O2
+
+```{r}
+sourcedata_clinical_ABC$pres_fio2 <- ifelse(sourcedata_clinical_ABC$pres_fio2 == 0, 21, sourcedata_clinical_ABC$pres_fio2)
+
+FIO2 <- sourcedata_clinical_ABC %>% select(c(study_id, pres_fio2, pres_pulse_bpm))
+
+mean_demo <- merge(mean_demo, FIO2, by.x = "Patient_ID", by.y = "study_id", all.x = T)
+
+cor.test(x=mean_demo$TAU, y=mean_demo$pres_fio2, method = 'spearman')
+plot(x=mean_demo$TAU, y=mean_demo$pres_fio2.x)
+```
+
+
+
+##ptau217
+
+```{r}
+pTau <- read.csv("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Input/2025_upd/PTAU.csv", na.strings = NaN)
+
+pTau$patient_type[pTau$patient_type == "Sepsis"] <- "Suspected sepsis"
+
+pTau_patients <- subset(pTau, pTau$patient_type=="Suspected sepsis")
+
+pTau_patients <- merge(pc1_scores_df, pTau_patients, by="Patient_ID")
+
+cor.test(x=pTau_patients$pTau217, y=pTau_patients$PC1_Score, method = 'spearman')
+
+Mean_Tau <- overall %>% select(c(Patient_ID, patient_type, TAU, Age, Sex))
+
+test_Tau <- merge(pTau, Mean_Tau, by=c("Patient_ID", "patient_type"), all.x = T)
+
+test_Tau <- subset(test_Tau, !is.na(test_Tau$TAU))
+test_Tau <- subset(test_Tau, !is.na(test_Tau$pTau217))
+
+cor.test(test_Tau$TAU, test_Tau$pTau217, method = "spearman")
+c <- subset(test_Tau, test_Tau$TAU<200)
+plot(c$TAU, c$pTau217)
+
+
+test_Tau <- merge(pTau, overall, by=c("Patient_ID"), all.x = T)
+test_Tau <- subset(test_Tau, test_Tau$patient_type.x=="Suspected sepsis" | test_Tau$patient_type.x == "BioResource Control")
+
+test_Tau$ptatutau <- test_Tau$pTau217/test_Tau$TAU
+
+wilcox.test(test_Tau$ptatutau~test_Tau$patient_type.x)
+wilcox.test(test_Tau$pTau217~test_Tau$patient_type.x)
+
+bxp <- ggpubr::ggboxplot(
+  test_Tau, x = "patient_type.x", y = "ptatutau", 
+  ylab = "p-tau-217:Tau", xlab = "Groups", add = "jitter", outlier.shape = NA
+  ) +
+  labs(title = "p-tau-217:Tau",   
+       x = "Groups",                                         
+       y = "p-tau-217:Tau") +                                 
+  theme(axis.text = element_text(size = 16),                 
+        axis.title.y = element_text(size = 16),
+        axis.title.x = element_blank(),
+        plot.title = element_text(size = 20, face = "bold"))  
+bxp
+ptautauratio <-  bxp+ stat_compare_means(
+  method = "wilcox.test", 
+  label = "p.format", 
+  comparisons = list(c("Suspected sepsis", "BioResource Control")), 
+  label.y = 0.4,
+  size = 10
+)
+ ptautauratio 
+ 
+ 
+wilcox_res <- wilcox.test(test_Tau$ptatutau~test_Tau$patient_type.x, exact=TRUE)
+wilcox_res
+
+W_val <- round(wilcox_res$statistic, 2)
+p_val <- round(wilcox_res$p.value, 3)
+
+
+label_text <- paste0("p = ", p_val)
+
+
+ratio_plot <- ggboxplot(
+  test_Tau, x = "patient_type.x", y = "ptatutau", 
+  ylab = "p-tau-217:Tau", xlab = "Groups", add = "jitter", outlier.shape = NA
+  ) +
+  labs(title = "p-tau-217:Tau",   
+       x = "Groups",                                         
+       y = "p-tau-217:Tau") +             
+  theme(
+    axis.text = element_text(size = 24),
+    axis.title.y = element_text(size = 24),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 28, face = "bold")
+  ) +
+  geom_segment(aes(x = 1, xend = 2, y = 0.4, yend = 0.4), linewidth = 0.8) +
+  geom_segment(aes(x = 1, xend = 1, y = 0.4, yend = 0.38), linewidth = 0.8) +
+  geom_segment(aes(x = 2, xend = 2, y = 0.4, yend = 0.38), linewidth = 0.8) +
+
+  annotate("text", x = 1.5, y = 0.42, label = label_text, size = 8)
+
+ratio_plot
+
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/pTAUTau_basic.jpg", plot = ratio_plot, device = "jpg", width = 17, height = 17, units = "in", dpi = 300)
+```
+
+#correlation of tau and age in sepsis
+
+```{r}
+test_Tau_sepsis <- subset(test_Tau, test_Tau$patient_type.x=="Suspected sepsis")
+test_Tau_sepsis$Age <- as.numeric(test_Tau_sepsis$Age)
+cor.test(test_Tau_sepsis$Age, test_Tau_sepsis$pTau217, method = "spearman")
+
+test_Tau_sepsis$ptauquartile <- cut(test_Tau_sepsis$pTau217,
+                   breaks = quantile(test_Tau_sepsis$pTau217, probs = seq(0, 1, 0.25), na.rm = TRUE),
+                   include.lowest = TRUE,
+                   labels = c("Q1", "Q2", "Q3", "Q4"))
+
+
+df_summary <- test_Tau_sepsis %>%
+  group_by(ptauquartile) %>%
+  summarise(
+    mean_value   = mean(Age, na.rm = TRUE),
+    median_value = median(Age, na.rm = TRUE),
+    IQR_value    = IQR(Age, na.rm = TRUE),
+    n            = n()
+  )
+
+```
+
+
+```{r}
+pTau$patient_type[pTau$patient_type == "BioResource Control"] <- "Non-Infected control"
+
+test_df <- subset(pTau, pTau$patient_type=="Suspected sepsis" | pTau$patient_type == "Non-Infected control" | pTau$patient_type == "Alzhiemers Control")
+test_df$patient_type <- recode(test_df$patient_type, 
+                                   "Alzhiemers Control" = "Alzheimer's Control")
+
+test_df$patient_type <- as.factor(test_df$patient_type)
+
+# Perform Kruskal-Wallis test
+kruskal.test(pTau217 ~ patient_type, data = test_df)
+dunn.test(test_df$pTau217, test_df$patient_type, method = "BH")
+# Perform Dunn's test for pairwise comparisons
+dunn_res <- dunn.test(test_df$pTau217, test_df$patient_type, method = "BH")
+dunn_res <- as.data.frame(dunn_res)
+
+test_df$patient_type <- factor(test_df$patient_type, 
+                               levels = c("Non-Infected control", "Suspected sepsis", "Alzheimer's Control"))
+
+
+test_df_sen <- subset(test_df, !test_df$Patient_ID%in%Stroke$study_id)
+
+dunn_res <- dunn.test(test_df_sen$pTau217, test_df_sen$patient_type)
+
+
+y1 <- 2.1   
+y2 <- 2.5  
+y3 <- 2.9   
+offset <- 0.1  
+
+
+p1 <- "p <0.001"  
+p2 <- "p <0.001"  
+p3 <- "p = 0.118" 
+
+
+p <- ggplot(test_df, aes(x = patient_type, y = pTau217)) +
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(width = 0.2, alpha = 0.5) + 
+
+  geom_segment(aes(x = 1, xend = 2, y = y1, yend = y1), linewidth = 0.8) +  
+  geom_segment(aes(x = 1, xend = 3, y = y2, yend = y2), linewidth = 0.8) +  
+  geom_segment(aes(x = 2, xend = 3, y = y3, yend = y3), linewidth = 0.8) +  
+
+  geom_segment(aes(x = 1, xend = 1, y = y1, yend = y1 - offset), linewidth = 0.8) +  
+  geom_segment(aes(x = 2, xend = 2, y = y1, yend = y1 - offset), linewidth = 0.8) +  
+  geom_segment(aes(x = 1, xend = 1, y = y2, yend = y2 - offset), linewidth = 0.8) +  
+  geom_segment(aes(x = 3, xend = 3, y = y2, yend = y2 - offset), linewidth = 0.8) +  
+  geom_segment(aes(x = 2, xend = 2, y = y3, yend = y3 - offset), linewidth = 0.8) +  
+  geom_segment(aes(x = 3, xend = 3, y = y3, yend = y3 - offset), linewidth = 0.8) +  
+
+  annotate("text", x = 1.5, y = y1 + 0.09, label = p1, size = 4) +  
+  annotate("text", x = 2, y = y2 + 0.09, label = p2, size = 4) +  
+  annotate("text", x = 2.5, y = y3 + 0.09, label = p3, size = 4) +  
+
+  geom_hline(yintercept = 0.42, linetype = "dashed", color = "red", linewidth = 0.8) +
+  labs(x = "", y = "p-tau-217 (pg/ml)") +  
+  theme_classic() +
+  theme(axis.text = element_text(size = 12),  
+        axis.title.y = element_text(size = 12))  
+
+print(p)
+
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/pTAU_basic.jpg", plot = p, device = "jpg", width = 21, height = 17, units = "cm", dpi = 300)
+```
+
+```{r}
+##Reference ranges intermediat 0.4-0.63, upper >0.63
+test_df <- subset(test_df, !is.na(test_df$pTau217))
+
+test_df <- test_df %>%
+  mutate(classification = case_when(
+    pTau217 < 0.4 ~ "Low",
+    pTau217 >= 0.4 & pTau217 <= 0.63 ~ "Intermediate",
+    pTau217 > 0.63 ~ "High"
+  ))
+
+summary_table <- test_df %>%
+  group_by(patient_type, classification) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  group_by(patient_type) %>%
+  mutate(percentage = round((count / sum(count)) * 100, 1)) %>%  
+  arrange(patient_type, classification)
+
+summary_table <- summary_table %>%
+  group_by(patient_type) %>%
+  mutate(total_count = sum(count),
+         proportion = count / total_count)  
+
+
+summary_table <- summary_table %>%
+  mutate(patient_type_label = paste0(patient_type, " (n=", total_count, ")"))
+
+custom_colors <- c(
+  "Low" = "#0CB702",         
+  "Intermediate" = "darkgoldenrod", 
+  "High" = "#F8766D"         
+)
+
+summary_table$patient_type_label <- factor(summary_table$patient_type_label, levels = c("Non-Infected control (n=20)", "Suspected sepsis (n=24)", "Alzheimer's Control (n=9)"))
+
+
+stacked_bar <- ggplot(summary_table, aes(x = patient_type_label, y = proportion, fill = classification)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = paste0(percentage, "%")), 
+            position = position_stack(vjust = 0.5), 
+            color = "black", 
+            size = 4) +
+  scale_fill_manual(values = custom_colors) + 
+  labs(title = "",
+       x = "Patient Type",
+       y = "Proportion",
+       fill = "Classification") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 12),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 14),
+        axis.text.y = element_blank())
+
+
+# Display the stacked bar graph
+print(stacked_bar)
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/Stacked.jpg", plot = stacked_bar, device = "jpg", width = 21, height = 17, units = "cm", dpi = 300)
+```
+
+```{r}
+sepsis_check <- subset(test_df, test_df$patient_type=="Suspected sepsis")
+
+Age_df <- demographics_time_1 %>% select(c(study_id, age, sex_at_birth, pres_lactate, news_score, pres_MAP, pres_gcs, total_LOS, survived_90, composite_deterioration))
+
+sepsis_check <- merge(sepsis_check, Age_df, by.x = "Patient_ID", by.y = "study_id", all.x = T)
+sepsis_check$age <- as.numeric(sepsis_check$age )
+
+cor.test(sepsis_check$age, sepsis_check$pTau217, method = "spearman")
+df_summary <- sepsis_check %>%
+  group_by(classification) %>%
+  summarise(
+    median_value = median(age, na.rm = TRUE),
+    IQR_value    = IQR(age, na.rm = TRUE),
+    n            = n(),
+    range_value  = paste0(min(age, na.rm = TRUE), "-", max(age, na.rm = TRUE))
+  )
+sepsis_check$classification <- as.factor(sepsis_check$classification)
+dunn.test(sepsis_check$age, sepsis_check$classification)
+
+anova_result <- aov(age ~ classification, data = sepsis_check)
+summary(anova_result)
+plot(anova_result)
+
+myVars <- c("age", "sex_at_birth", "news_score", "pres_lactate", "pres_gcs", "cns_infection", "organism_bloodculture", "total_LOS","survived_90", "composite_deterioration")
+## Vector of categorical variables that need transformation
+catVars <- c("survived_90", "sex_at_birth","composite_deterioration", "pres_gcs")
+non <- c( "news_score")
+## Create a TableOne object
+together_tab <- CreateTableOne(vars = myVars, factorVars = catVars, strata = "classification", data = sepsis_check)
+together_tab <- print(together_tab, nonnormal = non)
+together_tab
+
+hist(sepsis_check$age)
+
+write.csv(together_tab, "~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/ptau_demographics.csv")
+```
+
+
+##ptau versus cytokines
+
+```{r}
+sourcedata_cytokines_wide <- sourcedata_cytokines_wide[, -c(1:6)]
+sourcedata_cytokines_wide <- sourcedata_cytokines_wide[, -c(19:23)]
+sourcedata_cytokines_wide_T1 <-  as.data.frame(sourcedata_cytokines_wide)
+sourcedata_cytokines_wide_T1 <- subset(sourcedata_cytokines_wide, sourcedata_cytokines_wide$timepoint=="T1")
+
+ptau_neurodeg <- merge(pTau_patients, sourcedata_cytokines_wide_T1, by.x = "Patient_ID", by.y="study_ID", all.x = T)
+
+T1_pTAU <- ptau_neurodeg %>% select( c("Patient_ID", "pTau217", "IL-6","TNF-alpha":"CCL4"))
+
+T1_pTAU <- subset(T1_pTAU, !is.na(T1_pTAU$pTau217))
+
+T1_pTAU <- T1_pTAU %>% select(-c("Patient_ID"))
+  
+```
+
+```{r}
+res <- outer(T1_pTAU, T1_pTAU, Vectorize(function(x, y) {
+  cor.test(x, y, method = 'spearman',exact=FALSE)$p.value
+})) |>
+as.table() |> as.data.frame() |> setNames(c("Var1", "Var2", "p")) 
+  
+res <- subset(res, res$Var2=="pTau217")
+res <- subset(res, !res$Var1=="pTau217")
+res$p_adj <- p.adjust(res$p, method = "fdr")
+
+rho <- outer(T1_pTAU, T1_pTAU, Vectorize(function(x, y) {
+  cor(x, y, method = 'spearman')
+}))
+
+rho <- as.data.frame(rho)
+rho <- rho %>% select(c(pTau217))
+rho <- subset(rho, rho$pTau217<0.999999999)
+pTAU_T1_correlation <- cbind(res, rho)
+
+pTAU_T1_correlation$log_p <- -log10(pTAU_T1_correlation$p_adj)
+
+pTAU_T1_correlation$Var1 <- as.character(pTAU_T1_correlation$Var1)
+
+threshold <- -log10(0.01)
+pTau <- ggplot(pTAU_T1_correlation, aes(x = pTau217, y = log_p)) +
+  geom_point(aes(color = p_adj < 0.01), size = 3) +  
+  geom_hline(yintercept = threshold, color = "red", linetype = "dashed") +  
+  labs(x = "Spearmans Rho", y = "-log10(p-value)") +
+  ggtitle("") +
+  theme_classic() +  
+  scale_color_manual(values = c("black", "red")) +  
+  geom_text_repel(aes(label = Var1), 
+                  direction = "both", max.overlaps = Inf)  +  
+  theme(axis.text = element_text(size = 16),
+        axis.title = element_text(size = 18),
+        plot.title = element_text(size=22),
+        legend.position = "none") +
+        xlim(-0.1,0.9) + ylim(0,3)
+        
+pTau
+
+ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/cytok_pTAU.jpg", plot = pTau, device = "jpg", width = 10, height = 8, units = "in", dpi = 300)
+
+```

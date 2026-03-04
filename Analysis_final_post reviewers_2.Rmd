@@ -16,6 +16,7 @@ library(reshape2)
 library(Hmisc)
 library(ggrepel)
 library(dunn.test)
+library(cowplot)
 ```
 
 ```{r}
@@ -277,138 +278,8 @@ Stroke <- subset(sourcedata_clinical_ABC, sourcedata_clinical_ABC$comorb_stroke=
 write.csv(tab1, "~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/summary_data_extended.csv", row.names = FALSE)
 ```
 
-#Longitudinal
 
 ```{r}
-sepsis_samples$Time_to_sample_hours <- sepsis_samples$Time_to_sample/60
-
-## Vector of variables to summarize
-myVars <- c("GFAP", "NFL", "TAU", "UCHL1", "Time_to_sample_hours")
-## Vector of categorical variables that need transformation
-non <- c("GFAP", "NFL","TAU", "UCHL1", "Time_to_sample_hours")
-## Create a TableOne object
-together_tab <- CreateTableOne(vars = myVars, data = sepsis_samples, strata = "Time")
-together_tab <- print(together_tab, nonnormal = non)
-
-library(lme4)
-library(lmerTest)
-
-model1 <- lmer(log(GFAP) ~ Time_to_sample_hours + (1 | Patient_ID), data = sepsis_samples)
-summary(model1)
-plot(model1)
-model2 <- lmer(log(NFL) ~ Time_to_sample_hours + (1 | Patient_ID), data = sepsis_samples)
-summary(model2)
-plot(model2)
-model3 <- lmer(log(TAU) ~ Time_to_sample_hours + (1 | Patient_ID), data = sepsis_samples)
-summary(model3)
-plot(model3)
-model4 <- lmer(log(UCHL1) ~ Time_to_sample_hours + (1 | Patient_ID), data = sepsis_samples)
-summary(model4)
-plot(model4)
-```
-
-```{r}
-sepsis_samples_1 <- subset(sepsis_samples, sepsis_samples$Time=="T1")
-median(sepsis_samples_1$GFAP, na.rm = T)
-
-summary_stats <- function(x) {
-  time_val <- unique(sepsis_samples$Time)
-  summary_df <- data.frame(Time = character(),
-                           median = numeric(),
-                           ymin = numeric(),
-                           ymax = numeric(),
-                           stringsAsFactors = FALSE)
-  
-  for (time in time_val) {
-    subset_data <- x[sepsis_samples$Time == time]
-    median_val <- median(subset_data, na.rm = TRUE)
-    lower_val <- quantile(subset_data, 0.25, na.rm = TRUE)
-    upper_val <- quantile(subset_data, 0.75, na.rm = TRUE)
-    
-    summary_df <- rbind(summary_df, data.frame(Time = time,
-                                               median = median_val,
-                                               ymin = lower_val,
-                                               ymax = upper_val))
-  }
-  
-  return(summary_df)
-}
-
-GFAP_dot_data <- summary_stats(sepsis_samples$GFAP)
-
-
-GFAP_dot_plot <- ggplot(GFAP_dot_data, aes(x = Time, y = median)) +
-  geom_point(size = 5) +  # Increased dot size to 5
-  geom_errorbar(aes(ymin = ymin, ymax = ymax), linewidth = 1, width = 0.2) + 
-  geom_line(aes(group = 1), linewidth = 1, color = "black") +  
-  labs(x = "Time", y = "GFAP (pg/ml)") +  
-  theme_classic() +
-  scale_y_continuous(limits = c(0, 350), name = "GFAP (pg/ml)") +  
-  theme(axis.text = element_text(size = 16),
-        axis.title = element_text(size = 18))
-
-GFAP_dot_plot
-```
-
-```{r}
-NFL_dot_data <- summary_stats(sepsis_samples$NFL)
-
-
-NFL_dot_plot <- ggplot(NFL_dot_data, aes(x = Time, y = median)) +
-  geom_point(size = 5) +  # Increased dot size to 5
-  geom_errorbar(aes(ymin = ymin, ymax = ymax), linewidth = 1, width = 0.2) + 
-  geom_line(aes(group = 1), linewidth = 1, color = "black") +  
-  labs(x = "Time", y = "NFL (pg/ml)") +  
-  theme_classic() +
-  scale_y_continuous(limits = c(0, 50), name = "NFL (pg/ml)") +  
-  theme(axis.text = element_text(size = 16),
-        axis.title = element_text(size = 18))
-
-NFL_dot_plot
-```
-
-```{r}
-TAU_dot_data <- summary_stats(sepsis_samples$TAU)
-
-
-TAU_dot_plot <- ggplot(TAU_dot_data, aes(x = Time, y = median)) +
-  geom_point(size = 5) +  # Increased dot size to 5
-  geom_errorbar(aes(ymin = ymin, ymax = ymax), linewidth = 1, width = 0.2) + 
-  geom_line(aes(group = 1), linewidth = 1, color = "black") +  
-  labs(x = "Time", y = "TAU (pg/ml)") +  
-  theme_classic() +
-  scale_y_continuous(limits = c(0, 10), name = "TAU (pg/ml)") +  
-  theme(axis.text = element_text(size = 16),
-        axis.title = element_text(size = 18))
-
-TAU_dot_plot
-
-```
-
-```{r}
-UCH_dot_data <- summary_stats(sepsis_samples$UCHL1)
-
-
-UCH_dot_plot <- ggplot(UCH_dot_data, aes(x = Time, y = median)) +
-  geom_point(size = 5) +  # Increased dot size to 5
-  geom_errorbar(aes(ymin = ymin, ymax = ymax), linewidth = 1, width = 0.2) + 
-  geom_line(aes(group = 1), linewidth = 1, color = "black") +  
-  labs(x = "Time", y = "UCH-L1 (pg/ml)") +  
-  theme_classic() +
-  scale_y_continuous(limits = c(0, 60), name = "UCH-L1 (pg/ml)") +  
-  theme(axis.text = element_text(size = 16),
-        axis.title = element_text(size = 18))
-
-UCH_dot_plot
-```
-
-
-```{r}
-library(cowplot)
-All_dot_plot <- cowplot::plot_grid(GFAP_dot_plot, NFL_dot_plot, TAU_dot_plot, UCH_dot_plot, ncol = 2)
-ggsave("~/Documents/OneDrive - University of Cambridge/Documents/Sepsis_analysis/Sepsis_analysis/Output/All_Biomarkers_individual_longitudinal.jpg", plot = All_dot_plot, device = "jpg", width = 15, height = 7.5, units = "in", dpi = 300)
-
-overall_longitudinal <- overall
 overall <- subset(overall, overall$Time=="Non-Infected Control" | overall$Time=="T1")
 ```
 
